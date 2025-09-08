@@ -185,7 +185,7 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H
 
 --[ 03 - Credit
 
-Wei Guo, Yuanhao Li, Hao Zheng, Qiang Fu, Jiajia Liu
+Hao Zheng,Wei Guo, Yuanhao Li, Qiang Fu, Jiajia Liu
 Network Security College of Northwestern Polytechnical University
 
 --[ 04 - Proof of concept
